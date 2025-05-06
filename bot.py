@@ -1,142 +1,235 @@
+import asyncio
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-import json
-import time
-
-# Бот токени (сеники)
+# Токен
 TOKEN = "7508729989:AAEHffL9PBuOzvdD7dKTzYh8pPpHFX7nE4c"
 
-# Админ ID (сеники)
-ADMIN_ID = 5471744417
+# Глобальные переменные
+language = "ky"  # По умолчанию кыргызча
+admin_id =  5471744417 # Замените на свой Telegram ID админа
+films = {}  # Словарь для фильмов: {code: title}
+info = "Бул боттун маалыматы / Информация о боте"  # Информация по умолчанию
+channels = []  # Список каналов
 
-# Каналдардын тизмеси
-CHANNELS = ["@kyrgyzkino_kg", "@alga_kgz", "@bishkek_24", "@joldokgz"]
+# Меню панели
+def get_menu_keyboard():
+    keyboard = [
+        [InlineKeyboardButton("Кыргызча", callback_data="lang_ky"),
+         InlineKeyboardButton("Русский", callback_data="lang_ru")],
+        [InlineKeyboardButton("Кино кошуу", callback_data="add_film"),
+         InlineKeyboardButton("Кино өчүрүү", callback_data="delete_film")],
+        [InlineKeyboardButton("Маалымат кошуу", callback_data="set_info"),
+         InlineKeyboardButton("Маалымат өзгөртүү", callback_data="edit_info"),
+         InlineKeyboardButton("Маалымат өчүрүү", callback_data="delete_info")],
+        [InlineKeyboardButton("Канал кошуу", callback_data="add_channel"),
+         InlineKeyboardButton("Канал өзгөртүү", callback_data="edit_channel"),
+         InlineKeyboardButton("Канал өчүрүү", callback_data="delete_channel")],
+        [InlineKeyboardButton("Жардам / Помощь", callback_data="help")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
 
-# Кино маалыматтарын сактоо үчүн JSON файл
-DATABASE = "films.json"
-
-# Баштапкы маалымат базасы
-def load_films():
-    try:
-        with open(DATABASE, "r") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {}
-
-def save_films(films):
-    with open(DATABASE, "w") as f:
-        json.dump(films, f, indent=4)
-
-# Колдонуучунун тилин сактоо
-USER_LANGUAGE = {}
-
-# Баштоо командасы
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    USER_LANGUAGE[user_id] = "ky"  # Башында кыргызча
-
-    if not await check_subscription(update, context):
-        await update.message.reply_text(
-            "Ботту колдонуу үчүн төмөнкү каналдарга кошул:\n" +
-            "\n".join(CHANNELS) +
-            "\nКошулгандан кийин /start деп жаз."
-        )
-        return
-
+# /start командасы
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.message.from_user
     await update.message.reply_text(
-        "Салам! Кино кодун жаз (мисалы, K1234).\nЭгер түшүнбөсөң, жооп бер, орусчага өтөм."
+        f"Салам, {user.first_name}! Мен Кinolorkg ботаң! Тилди тандаңыз / Привет, {user.first_name}! Я бот Kinolorkg! Выберите язык:",
+        reply_markup=get_menu_keyboard()
     )
 
-# Каналга кошулганын текшерүү
-async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    for channel in CHANNELS:
+# Callback query handler для меню
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+
+    global language, info, channels
+    if query.data == "lang_ky":
+        language = "ky"
+        await query.edit_message_text("Тил кыргызчага алмаштырылды! / Язык изменён на кыргызский!", reply_markup=get_menu_keyboard())
+    elif query.data == "lang_ru":
+        language = "ru"
+        await query.edit_message_text("Язык изменён на русский! / Тил орусчага алмаштырылды!", reply_markup=get_menu_keyboard())
+    elif query.data == "help":
+        await query.edit_message_text("Жардам: /start - баштоо, /add_film - фильм кошуу. Админ болсоңуз, @BotFather'га жазыңыз. / Помощь: /start - начать, /add_film - добавить фильм. Если админ, пишите в @BotFather.", reply_markup=get_menu_keyboard())
+    elif query.data == "add_film":
+        if update.effective_user.id == admin_id:
+            await query.edit_message_text("MP4 файл жөнөтүңүз жана /add_film K1234 \"Аты\" деп жазыңыз. / Отправьте MP4 файл и напишите /add_film K1234 \"Название\".", reply_markup=get_menu_keyboard())
+        else:
+            await query.edit_message_text("Сиз администратор эмессиз! / Вы не администратор!", reply_markup=get_menu_keyboard())
+    elif query.data == "delete_film":
+        if update.effective_user.id == admin_id:
+            if films:
+                await query.edit_message_text(f"Кино тизмеси / Список фильмов:\n{films}\nКодду жазыңыз (мисалы, /delete_film K1234)", reply_markup=get_menu_keyboard())
+            else:
+                await query.edit_message_text("Кино тизмеси бош / Список фильмов пуст", reply_markup=get_menu_keyboard())
+        else:
+            await query.edit_message_text("Сиз администратор эмессиз! / Вы не администратор!", reply_markup=get_menu_keyboard())
+    elif query.data == "set_info":
+        if update.effective_user.id == admin_id:
+            await query.edit_message_text("Жаңы маалыматты жазыңыз (мисалы, /set_info Бул жаңы маалымат) / Напишите новую информацию (например, /set_info Это новая информация)", reply_markup=get_menu_keyboard())
+        else:
+            await query.edit_message_text("Сиз администратор эмессиз! / Вы не администратор!", reply_markup=get_menu_keyboard())
+    elif query.data == "edit_info":
+        if update.effective_user.id == admin_id:
+            await query.edit_message_text(f"Учурдагы маалымат / Текущая информация:\n{info}\nЖаңы маалыматты жазыңыз (мисалы, /set_info Жаңы текст) / Напишите новую информацию (например, /set_info Новый текст)", reply_markup=get_menu_keyboard())
+        else:
+            await query.edit_message_text("Сиз администратор эмессиз! / Вы не администратор!", reply_markup=get_menu_keyboard())
+    elif query.data == "delete_info":
+        if update.effective_user.id == admin_id:
+            info = "Маалымат өчүрүлдү / Информация удалена"
+            await query.edit_message_text("Маалымат өчүрүлдү / Информация удалена", reply_markup=get_menu_keyboard())
+        else:
+            await query.edit_message_text("Сиз администратор эмессиз! / Вы не администратор!", reply_markup=get_menu_keyboard())
+    elif query.data == "add_channel":
+        if update.effective_user.id == admin_id:
+            await query.edit_message_text("Канал шилтемесин жазыңыз (мисалы, /add_channel @channelname) / Напишите ссылку на канал (например, /add_channel @channelname)", reply_markup=get_menu_keyboard())
+        else:
+            await query.edit_message_text("Сиз администратор эмессиз! / Вы не администратор!", reply_markup=get_menu_keyboard())
+    elif query.data == "edit_channel":
+        if update.effective_user.id == admin_id:
+            if channels:
+                await query.edit_message_text(f"Каналдар тизмеси / Список каналов:\n{channels}\nӨзгөртүү үчүн: /edit_channel @old_channel @new_channel", reply_markup=get_menu_keyboard())
+            else:
+                await query.edit_message_text("Каналдар тизмеси бош / Список каналов пуст", reply_markup=get_menu_keyboard())
+        else:
+            await query.edit_message_text("Сиз администратор эмессиз! / Вы не администратор!", reply_markup=get_menu_keyboard())
+    elif query.data == "delete_channel":
+        if update.effective_user.id == admin_id:
+            if channels:
+                await query.edit_message_text(f"Каналдар тизмеси / Список каналов:\n{channels}\nӨчүрүү үчүн: /delete_channel @channelname", reply_markup=get_menu_keyboard())
+            else:
+                await query.edit_message_text("Каналдар тизмеси бош / Список каналов пуст", reply_markup=get_menu_keyboard())
+        else:
+            await query.edit_message_text("Сиз администратор эмессиз! / Вы не администратор!", reply_markup=get_menu_keyboard())
+
+# Фильм кошуу
+async def add_film(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != admin_id:
+        await update.message.reply_text("Сиз администратор эмессиз! / Вы не администратор!")
+        return
+
+    if update.message.document and update.message.text:
         try:
-            member = await context.bot.get_chat_member(channel, user.id)
-            if member.status not in ["member", "administrator", "creator"]:
-                return False
-        except:
-            return False
-    return True
+            command, code, title = update.message.text.split(maxsplit=2)
+            if command == "/add_film":
+                file = await update.message.document.get_file()
+                file_path = file.file_path
+                films[code] = title
+                await update.message.reply_text(f"{language_dict[language]['film_added']} {code} - {title}", reply_markup=get_menu_keyboard())
+        except ValueError:
+            await update.message.reply_text(f"{language_dict[language]['invalid_format']}", reply_markup=get_menu_keyboard())
 
-# Код менен кино жөнөтүү
-async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if not await check_subscription(update, context):
-        if USER_LANGUAGE.get(user_id, "ky") == "ky":
-            await update.message.reply_text("Каналдарга кошул!\n" + "\n".join(CHANNELS))
+# Фильм өчүрүү
+async def delete_film(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != admin_id:
+        await update.message.reply_text("Сиз администратор эмессиз! / Вы не администратор!")
+        return
+
+    try:
+        command, code = update.message.text.split()
+        if command == "/delete_film" and code in films:
+            del films[code]
+            await update.message.reply_text(f"Кино өчүрүлдү: {code} / Фильм удалён: {code}", reply_markup=get_menu_keyboard())
         else:
-            await update.message.reply_text("Подпишись на каналы!\n" + "\n".join(CHANNELS))
+            await update.message.reply_text("Мындай код табылган жок / Код не найден", reply_markup=get_menu_keyboard())
+    except ValueError:
+        await update.message.reply_text("Формат туура эмес! /delete_film K1234 деп жазыңыз / Неверный формат! Напишите /delete_film K1234", reply_markup=get_menu_keyboard())
+
+# Маалымат кошуу/өзгөртүү
+async def set_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != admin_id:
+        await update.message.reply_text("Сиз администратор эмессиз! / Вы не администратор!")
         return
 
-    code = update.message.text.strip()
-    films = load_films()
-
-    if code in films:
-        await update.message.reply_video(video=films[code]["file_id"], caption=films[code]["title"])
-    else:
-        if USER_LANGUAGE.get(user_id, "ky") == "ky":
-            await update.message.reply_text("Мындай код жок! Башка код жаз.")
+    try:
+        command, *new_info = update.message.text.split(maxsplit=1)
+        if command == "/set_info" and new_info:
+            global info
+            info = new_info[0]
+            await update.message.reply_text("Маалымат кошулду / Информация добавлена", reply_markup=get_menu_keyboard())
         else:
-            await update.message.reply_text("Такой код не найден! Попробуй другой.")
+            await update.message.reply_text("Формат туура эмес! /set_info Текст деп жазыңыз / Неверный формат! Напишите /set_info Текст", reply_markup=get_menu_keyboard())
+    except:
+        await update.message.reply_text("Маалыматты жазыңыз / Напишите информацию", reply_markup=get_menu_keyboard())
 
-# Тилди өзгөртүү (орусчага)
-async def switch_to_russian(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    USER_LANGUAGE[user_id] = "ru"
-    await update.message.reply_text("Хорошо, теперь я на русском! Напиши код фильма (например, K1234).")
-
-# Админ командалары
-async def add_film(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("Сен админ эмессиң!")
+# Канал кошуу
+async def add_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != admin_id:
+        await update.message.reply_text("Сиз администратор эмессиз! / Вы не администратор!")
         return
 
-    args = context.args
-    if len(args) < 2:
-        await update.message.reply_text("Колдонуу: /add_film <код> <аталыш>")
+    try:
+        command, channel = update.message.text.split()
+        if command == "/add_channel":
+            channels.append(channel)
+            await update.message.reply_text(f"Канал кошулду: {channel} / Канал добавлен: {channel}", reply_markup=get_menu_keyboard())
+    except ValueError:
+        await update.message.reply_text("Формат туура эмес! /add_channel @channelname деп жазыңыз / Неверный формат! Напишите /add_channel @channelname", reply_markup=get_menu_keyboard())
+
+# Канал өзгөртүү
+async def edit_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != admin_id:
+        await update.message.reply_text("Сиз администратор эмессиз! / Вы не администратор!")
         return
 
-    code, title = args[0], " ".join(args[1:])
-    films = load_films()
-    films[code] = {"title": title, "file_id": None}
-    save_films(films)
-    context.user_data['current_code'] = code  # Кодду сактоо
-    await update.message.reply_text(f"Кино кошулду: {code} - {title}\nЭми MP4 файл жөнөт, мен file_id алам.")
+    try:
+        command, old_channel, new_channel = update.message.text.split()
+        if command == "/edit_channel" and old_channel in channels:
+            index = channels.index(old_channel)
+            channels[index] = new_channel
+            await update.message.reply_text(f"Канал өзгөртүлдү: {old_channel} -> {new_channel} / Канал изменён: {old_channel} -> {new_channel}", reply_markup=get_menu_keyboard())
+        else:
+            await update.message.reply_text("Мындай канал табылган жок / Канал не найден", reply_markup=get_menu_keyboard())
+    except ValueError:
+        await update.message.reply_text("Формат туура эмес! /edit_channel @old_channel @new_channel деп жазыңыз / Неверный формат! Напишите /edit_channel @old_channel @new_channel", reply_markup=get_menu_keyboard())
 
-async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("Сен админ эмессиң!")
+# Канал өчүрүү
+async def delete_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != admin_id:
+        await update.message.reply_text("Сиз администратор эмессиз! / Вы не администратор!")
         return
 
-    video = update.message.video
-    if not video:
-        await update.message.reply_text("MP4 файл жөнөт!")
-        return
+    try:
+        command, channel = update.message.text.split()
+        if command == "/delete_channel" and channel in channels:
+            channels.remove(channel)
+            await update.message.reply_text(f"Канал өчүрүлдү: {channel} / Канал удалён: {channel}", reply_markup=get_menu_keyboard())
+        else:
+            await update.message.reply_text("Мындай канал табылган жок / Канал не найден", reply_markup=get_menu_keyboard())
+    except ValueError:
+        await update.message.reply_text("Формат туура эмес! /delete_channel @channelname деп жазыңыз / Неверный формат! Напишите /delete_channel @channelname", reply_markup=get_menu_keyboard())
 
-    code = context.user_data.get('current_code')
-    if code:
-        films = load_films()
-        films[code]["file_id"] = video.file_id
-        save_films(films)
-        await update.message.reply_text(f"Видео {code} код менен сакталды!")
-        del context.user_data['current_code']  # Кодду колдонгондон кийин өчүр
-    else:
-        await update.message.reply_text("Алгач /add_film <код> <аталыш> менен фильмди кошуңуз!")
+# Язык словарь
+language_dict = {
+    "ky": {"film_added": "Фильм кошулду:", "invalid_format": "Формат туура эмес! /add_film K1234 \"Аты\" деп жазыңыз."},
+    "ru": {"film_added": "Фильм добавлен:", "invalid_format": "Неверный формат! Напишите /add_film K1234 \"Название\"."}
+}
 
-# Ботту иштетүү
-def main():
+# Error handler
+async def error(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    print(f"Update {update} caused error {context.error}")
+
+# Main функция
+def main() -> None:
     application = Application.builder().token(TOKEN).build()
 
+    # Команды
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("ru", switch_to_russian))
     application.add_handler(CommandHandler("add_film", add_film))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_code))
-    application.add_handler(MessageHandler(filters.VIDEO, handle_video))
-    application.add_handler(MessageHandler(filters.Regex("(?i)^(оруске|русский|на русском)$"), switch_to_russian))
+    application.add_handler(CommandHandler("delete_film", delete_film))
+    application.add_handler(CommandHandler("set_info", set_info))
+    application.add_handler(CommandHandler("add_channel", add_channel))
+    application.add_handler(CommandHandler("edit_channel", edit_channel))
+    application.add_handler(CommandHandler("delete_channel", delete_channel))
 
-    application.run_polling()
+    # Callback query
+    application.add_handler(CallbackQueryHandler(button))
+
+    # Error handler
+    application.add_error_handler(error)
+
+    # Поллинг
+    application.run_polling(timeout=30, read_timeout=30, connect_timeout=30)
 
 if __name__ == "__main__":
     main()
